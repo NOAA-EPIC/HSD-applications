@@ -33,6 +33,15 @@ jobs:
 
       - name: Verify GPU presence and hardware
         run: |
+          echo "=== PCI Devices (NVIDIA / Display) ==="
+          lspci | grep -i -E "nvidia|3d|vga" || echo "No NVIDIA PCI device found on system bus!"
+          echo "=== Kernel Modules (NVIDIA) ==="
+          lsmod | grep -i nvidia || echo "No nvidia kernel module loaded initially."
+          echo "=== Attempting to load NVIDIA kernel modules ==="
+          sudo modprobe nvidia || echo "modprobe nvidia failed"
+          sudo modprobe nvidia-uvm || echo "modprobe nvidia-uvm failed"
+          echo "=== Kernel Log (NVIDIA) ==="
+          dmesg | grep -i nvidia | tail -n 20 || true
           echo "=== NVIDIA Driver & Device Status ==="
           nvidia-smi
           echo "=== Host Hardware Status ==="
@@ -93,5 +102,5 @@ jobs:
       - name: Show ccache statistics
         if: always()
         run: |
-          ccache -s
+          command -v ccache >/dev/null 2>&1 && ccache -s || true
 
