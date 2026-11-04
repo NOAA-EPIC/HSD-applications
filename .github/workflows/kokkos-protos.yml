@@ -31,6 +31,32 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Cache APT packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: ${{ runner.os }}-apt-cache-${{ hashFiles('.github/workflows/kokkos-protos.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-apt-cache-
+
+      - name: Install build toolchain dependencies
+        run: |
+          echo 'Binary::apt::APT::Keep-Downloaded-Packages "1";' | sudo tee /etc/apt/apt.conf.d/01keep-debs
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            ninja-build \
+            ccache \
+            libomp-dev \
+            gcc-12 \
+            g++-12 \
+            nvidia-cuda-toolkit
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100 --slave /usr/bin/g++ g++ /usr/bin/g++-12
+          echo "CC=gcc-12" >> $GITHUB_ENV
+          echo "CXX=g++-12" >> $GITHUB_ENV
+          echo "CUDAHOSTCXX=g++-12" >> $GITHUB_ENV
+
       - name: Configure CUDA Environment
         run: |
           echo "=== Locating CUDA Toolkit ==="
@@ -47,13 +73,10 @@ jobs:
             echo "CUDA_PATH=$CUDA_DIR" >> $GITHUB_ENV
             echo "CUDAToolkit_ROOT=$CUDA_DIR" >> $GITHUB_ENV
             echo "CUDACXX=$CUDA_DIR/bin/nvcc" >> $GITHUB_ENV
-            echo "CUDAHOSTCXX=g++" >> $GITHUB_ENV
             echo "LD_LIBRARY_PATH=$CUDA_DIR/lib64:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
           else
-            echo "CUDA Toolkit not in /usr/local/cuda; installing via apt..."
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends nvidia-cuda-toolkit
-            echo "CUDAHOSTCXX=g++" >> $GITHUB_ENV
+            echo "Using system-installed nvcc at: $(which nvcc || echo 'not found')"
+            echo "CUDACXX=$(which nvcc)" >> $GITHUB_ENV
           fi
 
       - name: Verify GPU presence and hardware
@@ -69,21 +92,14 @@ jobs:
           dmesg | grep -i nvidia | tail -n 20 || true
           echo "=== NVIDIA Driver & Device Status ==="
           nvidia-smi
+          echo "=== Host Compiler Status ==="
+          gcc --version
+          g++ --version
           echo "=== NVCC Compiler Status ==="
           nvcc --version || true
           echo "=== Host Hardware Status ==="
           lscpu || true
           free -h
-
-      - name: Install build toolchain dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            cmake \
-            ninja-build \
-            ccache \
-            libomp-dev
 
       - name: Cache ccache objects
         uses: actions/cache@v4
@@ -111,6 +127,9 @@ jobs:
         run: |
           cmake -B kokkos-protos/build -S kokkos-protos -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=gcc-12 \
+            -DCMAKE_CXX_COMPILER=g++-12 \
+            -DCMAKE_CUDA_HOST_COMPILER=g++-12 \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache \
             -DKokkos_ENABLE_SERIAL=ON \
