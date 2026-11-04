@@ -1,0 +1,19 @@
+# Build directories
+build/
+cmake-build-*/
+_deps/
+*.o
+*.a
+*.so
+*.dylib
+
+# Ccache
+.ccache/
+
+# IDE and Editor
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+

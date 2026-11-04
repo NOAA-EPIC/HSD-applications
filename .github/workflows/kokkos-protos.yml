@@ -1,0 +1,97 @@
+name: kokkos-protos CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test-gpu-runner:
+    name: Kokkos Protos (GPU + OpenMP + Serial)
+    # Target the smallest GitHub-hosted GPU larger runner (4 vCPU, 28 GB RAM, 1x NVIDIA Tesla T4)
+    # The runner label defaults to ubuntu-22.04-gpu but can be overridden by repo/org variable
+    runs-on: ${{ vars.GPU_RUNNER_LABEL || 'ubuntu-22.04-gpu' }}
+
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPRESS: "true"
+      CCACHE_COMPRESSLEVEL: "6"
+      CCACHE_MAXSIZE: "2G"
+      OMP_NUM_THREADS: "4"
+      OMP_PROC_BIND: "false"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify GPU presence and hardware
+        run: |
+          echo "=== NVIDIA Driver & Device Status ==="
+          nvidia-smi
+          echo "=== Host Hardware Status ==="
+          lscpu || true
+          free -h
+
+      - name: Install build toolchain dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            ninja-build \
+            ccache \
+            libomp-dev
+
+      - name: Cache ccache objects
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-kokkos-ccache-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-kokkos-ccache-
+
+      - name: Cache Kokkos FetchContent dependencies
+        uses: actions/cache@v4
+        with:
+          path: kokkos-protos/build/_deps
+          key: ${{ runner.os }}-kokkos-fetchcontent-${{ hashFiles('kokkos-protos/CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-kokkos-fetchcontent-
+
+      - name: Initialize ccache
+        run: |
+          mkdir -p "${CCACHE_DIR}"
+          ccache -z
+          ccache -s
+
+      - name: Configure CMake (Serial + OpenMP + CUDA sm_75)
+        run: |
+          cmake -B kokkos-protos/build -S kokkos-protos -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache \
+            -DKokkos_ENABLE_SERIAL=ON \
+            -DKokkos_ENABLE_OPENMP=ON \
+            -DKokkos_ENABLE_CUDA=ON \
+            -DCMAKE_CUDA_ARCHITECTURES=75
+
+      - name: Build Kokkos prototype
+        run: |
+          cmake --build kokkos-protos/build --parallel
+
+      - name: Run CTest harness (Serial, OpenMP, and CUDA backends)
+        run: |
+          ctest --test-dir kokkos-protos/build --output-on-failure
+
+      - name: Show ccache statistics
+        if: always()
+        run: |
+          ccache -s
+
