@@ -7,8 +7,9 @@ _deps/
 *.so
 *.dylib
 
-# Ccache
+# Ccache and APT cache
 .ccache/
+.apt-cache/
 
 # IDE and Editor
 .idea/

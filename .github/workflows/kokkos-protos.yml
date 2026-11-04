@@ -34,14 +34,22 @@ jobs:
       - name: Cache APT packages
         uses: actions/cache@v4
         with:
-          path: /var/cache/apt/archives
+          path: .apt-cache
           key: ${{ runner.os }}-apt-cache-${{ hashFiles('.github/workflows/kokkos-protos.yml') }}
           restore-keys: |
             ${{ runner.os }}-apt-cache-
 
       - name: Install build toolchain dependencies
         run: |
+          # 1. Restore cached deb packages into system apt directory
+          sudo mkdir -p /var/cache/apt/archives
+          mkdir -p .apt-cache
+          sudo cp -a .apt-cache/*.deb /var/cache/apt/archives/ 2>/dev/null || true
+
+          # 2. Tell apt to keep downloaded packages in its cache
           echo 'Binary::apt::APT::Keep-Downloaded-Packages "1";' | sudo tee /etc/apt/apt.conf.d/01keep-debs
+
+          # 3. Update and install packages
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential \
@@ -52,6 +60,12 @@ jobs:
             gcc-12 \
             g++-12 \
             nvidia-cuda-toolkit
+
+          # 4. Save newly downloaded packages to workspace .apt-cache folder for caching
+          sudo cp -a /var/cache/apt/archives/*.deb .apt-cache/ 2>/dev/null || true
+          sudo chown -R $USER:$USER .apt-cache
+
+          # 5. Configure GCC 12 and ccache paths
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100 --slave /usr/bin/g++ g++ /usr/bin/g++-12
           echo "CC=gcc-12" >> $GITHUB_ENV
           echo "CXX=g++-12" >> $GITHUB_ENV

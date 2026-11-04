@@ -49,9 +49,6 @@ target_link_libraries(kokkos_runner PRIVATE Kokkos::kokkos)
 if(Kokkos_ENABLE_CUDA)
     # Compile main.cpp with nvcc when CUDA backend is active
     set_source_files_properties(src/main.cpp PROPERTIES LANGUAGE CUDA)
-    set_target_properties(kokkos_runner PROPERTIES
-        CUDA_SEPARABLE_COMPILATION ON
-    )
 endif()
 
 if(Kokkos_ENABLE_OPENMP)
