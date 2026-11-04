@@ -31,6 +31,31 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Configure CUDA Environment
+        run: |
+          echo "=== Locating CUDA Toolkit ==="
+          CUDA_DIR=""
+          if [ -d "/usr/local/cuda" ]; then
+            CUDA_DIR="/usr/local/cuda"
+          elif ls -d /usr/local/cuda-* >/dev/null 2>&1; then
+            CUDA_DIR=$(ls -d /usr/local/cuda-* | sort -V | tail -n 1)
+          fi
+
+          if [ -n "$CUDA_DIR" ] && [ -x "$CUDA_DIR/bin/nvcc" ]; then
+            echo "Found pre-installed CUDA Toolkit at: $CUDA_DIR"
+            echo "$CUDA_DIR/bin" >> $GITHUB_PATH
+            echo "CUDA_PATH=$CUDA_DIR" >> $GITHUB_ENV
+            echo "CUDAToolkit_ROOT=$CUDA_DIR" >> $GITHUB_ENV
+            echo "CUDACXX=$CUDA_DIR/bin/nvcc" >> $GITHUB_ENV
+            echo "CUDAHOSTCXX=g++" >> $GITHUB_ENV
+            echo "LD_LIBRARY_PATH=$CUDA_DIR/lib64:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
+          else
+            echo "CUDA Toolkit not in /usr/local/cuda; installing via apt..."
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends nvidia-cuda-toolkit
+            echo "CUDAHOSTCXX=g++" >> $GITHUB_ENV
+          fi
+
       - name: Verify GPU presence and hardware
         run: |
           echo "=== PCI Devices (NVIDIA / Display) ==="
@@ -44,6 +69,8 @@ jobs:
           dmesg | grep -i nvidia | tail -n 20 || true
           echo "=== NVIDIA Driver & Device Status ==="
           nvidia-smi
+          echo "=== NVCC Compiler Status ==="
+          nvcc --version || true
           echo "=== Host Hardware Status ==="
           lscpu || true
           free -h
