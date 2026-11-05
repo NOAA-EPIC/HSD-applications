@@ -31,8 +31,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Cache APT packages
-        uses: actions/cache@v4
+      - name: Restore APT cache
+        id: apt-cache
+        uses: actions/cache/restore@v4
         with:
           path: .apt-cache
           key: ${{ runner.os }}-apt-cache-${{ hashFiles('.github/workflows/kokkos-protos.yml') }}
@@ -71,6 +72,13 @@ jobs:
           echo "CXX=g++-12" >> $GITHUB_ENV
           echo "CUDAHOSTCXX=g++-12" >> $GITHUB_ENV
           echo "/usr/lib/ccache" >> $GITHUB_PATH
+
+      - name: Save APT cache
+        uses: actions/cache/save@v4
+        if: steps.apt-cache.outputs.cache-hit != 'true'
+        with:
+          path: .apt-cache
+          key: ${{ steps.apt-cache.outputs.cache-primary-key || format('{0}-apt-cache-{1}', runner.os, hashFiles('.github/workflows/kokkos-protos.yml')) }}
 
       - name: Configure CUDA Environment
         run: |

@@ -53,6 +53,9 @@ endif()
 
 if(Kokkos_ENABLE_OPENMP)
     target_link_libraries(kokkos_runner PRIVATE OpenMP::OpenMP_CXX)
+    if(Kokkos_ENABLE_CUDA)
+        target_compile_options(kokkos_runner PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-fopenmp>)
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
