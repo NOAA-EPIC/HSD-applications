@@ -1,0 +1,182 @@
+name: kokkos-protos CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test-gpu-runner:
+    name: Kokkos Protos (GPU + OpenMP + Serial)
+    # Target the smallest GitHub-hosted GPU larger runner (4 vCPU, 28 GB RAM, 1x NVIDIA Tesla T4)
+    # The runner label defaults to ubuntu-22.04-gpu but can be overridden by repo/org variable
+    runs-on: ${{ vars.GPU_RUNNER_LABEL || 'ubuntu-22.04-gpu' }}
+
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      NEEDRESTART_MODE: a
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPRESS: "true"
+      CCACHE_COMPRESSLEVEL: "6"
+      CCACHE_MAXSIZE: "2G"
+      OMP_NUM_THREADS: "4"
+      OMP_PROC_BIND: "false"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Restore APT cache
+        id: apt-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .apt-cache
+          key: ${{ runner.os }}-apt-cache-${{ hashFiles('.github/workflows/kokkos-protos.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-apt-cache-
+
+      - name: Install build toolchain dependencies
+        run: |
+          # Prevent needrestart or debconf interactive prompts
+          sudo mkdir -p /etc/needrestart/conf.d
+          echo '$nrconf{restart} = "a";' | sudo tee /etc/needrestart/conf.d/noninteractive.conf >/dev/null
+          echo '$nrconf{kernelhints} = 0;' | sudo tee -a /etc/needrestart/conf.d/noninteractive.conf >/dev/null
+
+          # 1. Restore cached deb packages into system apt directory
+          sudo mkdir -p /var/cache/apt/archives
+          mkdir -p .apt-cache
+          sudo cp -a .apt-cache/*.deb /var/cache/apt/archives/ 2>/dev/null || true
+
+          # 2. Tell apt to keep downloaded packages in its cache
+          echo 'Binary::apt::APT::Keep-Downloaded-Packages "1";' | sudo tee /etc/apt/apt.conf.d/01keep-debs
+
+          # 3. Update and install packages non-interactively
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            -o Dpkg::Options::="--force-confdef" \
+            -o Dpkg::Options::="--force-confold" \
+            build-essential \
+            cmake \
+            ninja-build \
+            ccache \
+            libomp-dev \
+            gcc-12 \
+            g++-12 \
+            nvidia-cuda-toolkit
+
+          # 4. Save newly downloaded packages to workspace .apt-cache folder for caching
+          sudo cp -a /var/cache/apt/archives/*.deb .apt-cache/ 2>/dev/null || true
+          sudo chown -R $USER:$USER .apt-cache
+
+          # 5. Configure GCC 12 and ccache paths
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100 --slave /usr/bin/g++ g++ /usr/bin/g++-12
+          echo "CC=gcc-12" >> $GITHUB_ENV
+          echo "CXX=g++-12" >> $GITHUB_ENV
+          echo "CUDAHOSTCXX=g++-12" >> $GITHUB_ENV
+          echo "/usr/lib/ccache" >> $GITHUB_PATH
+
+      - name: Save APT cache
+        uses: actions/cache/save@v4
+        if: steps.apt-cache.outputs.cache-hit != 'true'
+        with:
+          path: .apt-cache
+          key: ${{ runner.os }}-apt-cache-${{ hashFiles('.github/workflows/kokkos-protos.yml') }}
+
+      - name: Configure CUDA Environment
+        run: |
+          echo "=== Locating CUDA Toolkit ==="
+          CUDA_DIR=""
+          if [ -d "/usr/local/cuda" ]; then
+            CUDA_DIR="/usr/local/cuda"
+          elif ls -d /usr/local/cuda-* >/dev/null 2>&1; then
+            CUDA_DIR=$(ls -d /usr/local/cuda-* | sort -V | tail -n 1)
+          fi
+
+          if [ -n "$CUDA_DIR" ] && [ -x "$CUDA_DIR/bin/nvcc" ]; then
+            echo "Found pre-installed CUDA Toolkit at: $CUDA_DIR"
+            echo "$CUDA_DIR/bin" >> $GITHUB_PATH
+            echo "CUDA_PATH=$CUDA_DIR" >> $GITHUB_ENV
+            echo "CUDAToolkit_ROOT=$CUDA_DIR" >> $GITHUB_ENV
+            echo "CUDACXX=$CUDA_DIR/bin/nvcc" >> $GITHUB_ENV
+            echo "LD_LIBRARY_PATH=$CUDA_DIR/lib64:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
+          else
+            echo "Using system-installed nvcc at: $(which nvcc || echo 'not found')"
+            echo "CUDACXX=$(which nvcc)" >> $GITHUB_ENV
+          fi
+
+      - name: Verify GPU presence and hardware
+        run: |
+          echo "=== PCI Devices (NVIDIA / Display) ==="
+          lspci | grep -i -E "nvidia|3d|vga" || echo "No NVIDIA PCI device found on system bus!"
+          echo "=== Kernel Modules (NVIDIA) ==="
+          lsmod | grep -i nvidia || echo "No nvidia kernel module loaded initially."
+          echo "=== Attempting to load NVIDIA kernel modules ==="
+          sudo modprobe nvidia || echo "modprobe nvidia failed"
+          sudo modprobe nvidia-uvm || echo "modprobe nvidia-uvm failed"
+          echo "=== Kernel Log (NVIDIA) ==="
+          dmesg | grep -i nvidia | tail -n 20 || true
+          echo "=== NVIDIA Driver & Device Status ==="
+          nvidia-smi
+          echo "=== Host Compiler Status ==="
+          gcc --version
+          g++ --version
+          echo "=== NVCC Compiler Status ==="
+          nvcc --version || true
+          echo "=== Host Hardware Status ==="
+          lscpu || true
+          free -h
+
+      - name: Cache ccache objects
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-kokkos-ccache-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-kokkos-ccache-
+
+      - name: Cache Kokkos FetchContent dependencies
+        uses: actions/cache@v4
+        with:
+          path: kokkos-protos/build/_deps
+          key: ${{ runner.os }}-kokkos-fetchcontent-${{ hashFiles('kokkos-protos/CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-kokkos-fetchcontent-
+
+      - name: Initialize ccache
+        run: |
+          mkdir -p "${CCACHE_DIR}"
+          ccache -z
+          ccache -s
+
+      - name: Configure CMake (Serial + OpenMP + CUDA sm_75)
+        run: |
+          cmake -B kokkos-protos/build -S kokkos-protos -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=gcc-12 \
+            -DCMAKE_CXX_COMPILER=g++-12 \
+            -DCMAKE_CUDA_HOST_COMPILER=g++-12 \
+            -DKokkos_ENABLE_SERIAL=ON \
+            -DKokkos_ENABLE_OPENMP=ON \
+            -DKokkos_ENABLE_CUDA=ON \
+            -DCMAKE_CUDA_ARCHITECTURES=75
+
+      - name: Build Kokkos prototype
+        run: |
+          cmake --build kokkos-protos/build --parallel
+
+      - name: Run CTest harness (Serial, OpenMP, and CUDA backends)
+        run: |
+          ctest --test-dir kokkos-protos/build --verbose --output-on-failure
+
+      - name: Show ccache statistics
+        if: always()
+        run: |
+          command -v ccache >/dev/null 2>&1 && ccache -s || true
+
