@@ -20,6 +20,8 @@ jobs:
     runs-on: ${{ vars.GPU_RUNNER_LABEL || 'ubuntu-22.04-gpu' }}
 
     env:
+      DEBIAN_FRONTEND: noninteractive
+      NEEDRESTART_MODE: a
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_COMPRESS: "true"
       CCACHE_COMPRESSLEVEL: "6"
@@ -42,6 +44,11 @@ jobs:
 
       - name: Install build toolchain dependencies
         run: |
+          # Prevent needrestart or debconf interactive prompts
+          sudo mkdir -p /etc/needrestart/conf.d
+          echo '$nrconf{restart} = "a";' | sudo tee /etc/needrestart/conf.d/noninteractive.conf >/dev/null
+          echo '$nrconf{kernelhints} = 0;' | sudo tee -a /etc/needrestart/conf.d/noninteractive.conf >/dev/null
+
           # 1. Restore cached deb packages into system apt directory
           sudo mkdir -p /var/cache/apt/archives
           mkdir -p .apt-cache
@@ -50,9 +57,11 @@ jobs:
           # 2. Tell apt to keep downloaded packages in its cache
           echo 'Binary::apt::APT::Keep-Downloaded-Packages "1";' | sudo tee /etc/apt/apt.conf.d/01keep-debs
 
-          # 3. Update and install packages
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          # 3. Update and install packages non-interactively
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            -o Dpkg::Options::="--force-confdef" \
+            -o Dpkg::Options::="--force-confold" \
             build-essential \
             cmake \
             ninja-build \
@@ -78,7 +87,7 @@ jobs:
         if: steps.apt-cache.outputs.cache-hit != 'true'
         with:
           path: .apt-cache
-          key: ${{ steps.apt-cache.outputs.cache-primary-key || format('{0}-apt-cache-{1}', runner.os, hashFiles('.github/workflows/kokkos-protos.yml')) }}
+          key: ${{ runner.os }}-apt-cache-${{ hashFiles('.github/workflows/kokkos-protos.yml') }}
 
       - name: Configure CUDA Environment
         run: |
