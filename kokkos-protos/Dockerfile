@@ -37,7 +37,7 @@ RUN cmake -B build -S . -G Ninja \
 RUN cmake --build build --parallel
 
 # Execute CTest test suite at build time (runs CPU tests by default)
-RUN ctest --test-dir build --output-on-failure -L cpu
+RUN ctest --test-dir build --verbose --output-on-failure -L cpu
 
 CMD ["/workspace/build/kokkos_runner"]
 

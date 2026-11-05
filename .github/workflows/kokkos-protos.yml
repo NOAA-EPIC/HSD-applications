@@ -173,7 +173,7 @@ jobs:
 
       - name: Run CTest harness (Serial, OpenMP, and CUDA backends)
         run: |
-          ctest --test-dir kokkos-protos/build --output-on-failure
+          ctest --test-dir kokkos-protos/build --verbose --output-on-failure
 
       - name: Show ccache statistics
         if: always()
